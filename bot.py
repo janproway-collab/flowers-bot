@@ -3,7 +3,7 @@ import os
 import json
 import sqlite3
 import time
-import csv
+import openpyxl
 import traceback
 from datetime import datetime
 from flask import Flask, request, jsonify
@@ -40,7 +40,7 @@ def get_image_url(name):
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    bot.send_message(message.chat.id, "Добро пожаловать! Отправьте мне CSV-файл с прайсом.")
+    bot.send_message(message.chat.id, "Добро пожаловать! Отправьте мне Excel-файл (.xlsx) с прайсом.")
 
 @bot.message_handler(commands=['approve'])
 def approve_cmd(message):
@@ -54,70 +54,67 @@ def approve_cmd(message):
     except:
         bot.send_message(ADMIN_ID, "Ошибка. Используй: /approve 123456789")
 
-# --- УМНОЕ ЧТЕНИЕ CSV ---
-def process_csv(message):
+# --- ЧТЕНИЕ EXCEL ---
+def process_excel(message):
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         
-        with open('temp.csv', 'wb') as new_file:
+        with open('temp.xlsx', 'wb') as new_file:
             new_file.write(downloaded_file)
         
-        products = []
-        rate = 3.07
+        # Открываем Excel в режиме read_only (чтобы не сожрать память)
+        wb = openpyxl.load_workbook('temp.xlsx', read_only=True, data_only=True)
+        sheet = wb.active
         
-        # Пытаемся открыть файл в разных кодировках, пока не получится
-        content = None
-        for encoding in ['utf-8-sig', 'cp1251', 'utf-16', 'utf-8']:
-            try:
-                with open('temp.csv', 'r', encoding=encoding) as f:
-                    content = list(csv.reader(f))
-                break # Если открылось - выходим из цикла
-            except UnicodeDecodeError:
-                continue
-                
-        if not content:
-            raise Exception("Не удалось распознать кодировку файла. Попробуйте сохранить как 'CSV UTF-8'.")
+        products = []
+        rate = 3.07 
+        
+        # Ищем курс в E1
+        try:
+            rate_cell = sheet.cell(row=1, column=5).value
+            if isinstance(rate_cell, (int, float)):
+                rate = float(rate_cell)
+        except:
+            pass
 
-        # Берем только первые 300 строк, чтобы не перегружать память
-        for row in content[:300]:
-            if len(row) < 9: continue
-            
-            # Левая колонка
-            name_l = row[0].strip()
-            price_l = row[2].replace(',', '.').strip()
-            if name_l and price_l:
-                try:
-                    products.append((name_l, float(price_l), rate, get_image_url(name_l)))
-                except: pass
-            
-            # Правая колонка
-            name_r = row[5].strip()
-            price_r = row[7].replace(',', '.').strip()
-            if name_r and price_r:
-                try:
-                    products.append((name_r, float(price_r), rate, get_image_url(name_r)))
-                except: pass
+        # Проходимся по строкам (берем максимум 200 строк, чтобы не зависнуть)
+        for row in sheet.iter_rows(min_row=2, max_row=200, max_col=9):
+            # Левая колонка (Гипсофила, Гвоздика и т.д.)
+            name_left = row[0].value
+            price_left = row[2].value
+            if name_left and isinstance(price_left, (int, float)):
+                products.append((str(name_left).strip(), float(price_left), rate, get_image_url(str(name_left))))
 
-        # Очищаем старую базу и вставляем новую
+            # Правая колонка (Роза EC и т.д.)
+            name_right = row[5].value
+            price_right = row[7].value
+            if name_right and isinstance(price_right, (int, float)):
+                products.append((str(name_right).strip(), float(price_right), rate, get_image_url(str(name_right))))
+
+        if len(products) == 0:
+            bot.reply_to(message, "⚠️ Прочитал файл, но не нашел цен. Проверьте, что цены в колонках C и H — это цифры.")
+            return
+
         c.execute('DELETE FROM products')
         c.executemany('INSERT INTO products (name, base_price, rate, image) VALUES (?, ?, ?, ?)', products)
         conn.commit()
         
-        bot.reply_to(message, f"✅ Успех! Загружено {len(products)} позиций.")
+        bot.reply_to(message, f"✅ Успех! Загружено {len(products)} позиций. Курс: {rate}")
         
     except Exception as e:
         bot.reply_to(message, f"❌ ОШИБКА: {e}")
+        print(traceback.format_exc())
 
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
     if message.from_user.id != ADMIN_ID: return
     
-    if message.document.file_name.endswith('.csv'):
-        bot.reply_to(message, "⏳ Читаю CSV-файл...")
-        Thread(target=process_csv, args=(message,)).start()
+    if message.document.file_name.endswith('.xlsx'):
+        bot.reply_to(message, "⏳ Читаю Excel-файл...")
+        Thread(target=process_excel, args=(message,)).start()
     else:
-        bot.reply_to(message, "Пожалуйста, отправьте файл в формате .csv")
+        bot.reply_to(message, "Пожалуйста, отправьте файл в формате .xlsx (обычный Excel).")
 
 # --- API ---
 @app.route('/')
