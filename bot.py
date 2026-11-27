@@ -1,6 +1,7 @@
 import telebot
 import os
 from flask import Flask, request
+from flask_cors import CORS
 from threading import Thread
 
 # ===== ТВОИ ДАННЫЕ =====
@@ -18,33 +19,29 @@ def start_message(message):
 def handle_web_app_data(message):
     print("!!! ПОЛУЧЕНЫ ДАННЫЕ ОТ ТЕЛЕГРАМ:", message.web_app_data.data)
     try:
-        bot.send_message(
-            ADMIN_ID,
-            f"🔥 Новая заявка!\nКлиент: {message.from_user.first_name}\nДанные: {message.web_app_data.data}"
-        )
+        bot.send_message(ADMIN_ID, f"🔥 Новая заявка (Телеграм):\nКлиент: {message.from_user.first_name}\nДанные: {message.web_app_data.data}")
     except Exception as e:
         print("ОШИБКА ОТПРАВКИ:", e)
     bot.send_message(message.chat.id, "✅ Заявка принята! Менеджер свяжется с вами.")
 
-# --- Фейковый сайт для Render ---
 app = Flask(__name__)
+CORS(app) # <--- ВОТ ЭТО РАЗРЕШАЕТ САЙТУ ОТПРАВЛЯТЬ ДАННЫЕ
 
 @app.route('/')
 def home():
     return "Bot is alive!"
 
-# НОВЫЙ МАРШРУТ ДЛЯ ОТЛАДКИ (принимает данные напрямую с сайта)
-@app.route('/debug', methods=['POST'])
+@app.route('/debug', methods=['POST', 'OPTIONS']) # Добавили OPTIONS для браузера
 def debug():
+    if request.method == 'OPTIONS':
+        return "OK", 200
     data = request.json
-    print("!!! ДАННЫЕ ПРИШЛИ НАПРЯМУЮ С САЙТА (fetch):", data)
-    # Отправляем тебе в ТГ, чтобы ты видел, что это сработало
+    print("!!! ДАННЫЕ ПРИШЛИ НАПРЯМУЮ С САЙТА:", data)
     try:
-        bot.send_message(ADMIN_ID, f"🛠 ТЕСТОВОЕ СООБЩЕНИЕ (напрямую с сайта):\n{data}")
+        bot.send_message(ADMIN_ID, f"🛠 ТЕСТ (напрямую с сайта):\n{data}")
     except:
         pass
     return "OK", 200
-# --------------------------------
 
 def run_web_server():
     port = int(os.environ.get('PORT', 8080))
