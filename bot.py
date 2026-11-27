@@ -1,7 +1,7 @@
 import telebot
 
 # ===== ЗАМЕНИ ЭТИ ДВЕ СТРОКИ =====
-TOKEN = '283859144:AAGe6xwrC5VhXkIssW7I5U7SUoIsv7iUVGM'
+TOKEN = '9283859144:AAGe6xwrC5VhXkIssW7I5U7SUoIsv7iUVGM'
 ADMIN_ID = 5260033843
 # =================================
 
