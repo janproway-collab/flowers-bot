@@ -40,7 +40,7 @@ def get_image_url(name):
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    bot.send_message(message.chat.id, "Добро пожаловать! Отправьте мне CSV-файл с прайсом, чтобы обновить каталог.")
+    bot.send_message(message.chat.id, "Добро пожаловать! Отправьте мне CSV-файл с прайсом.")
 
 @bot.message_handler(commands=['approve'])
 def approve_cmd(message):
@@ -54,7 +54,7 @@ def approve_cmd(message):
     except:
         bot.send_message(ADMIN_ID, "Ошибка. Используй: /approve 123456789")
 
-# --- ЧТЕНИЕ CSV ФАЙЛА ---
+# --- УМНОЕ ЧТЕНИЕ CSV ---
 def process_csv(message):
     try:
         file_info = bot.get_file(message.document.file_id)
@@ -64,48 +64,50 @@ def process_csv(message):
             new_file.write(downloaded_file)
         
         products = []
-        rate = 3.07 # Значение по умолчанию
+        rate = 3.07
+        
+        # Пытаемся открыть файл в разных кодировках, пока не получится
+        content = None
+        for encoding in ['utf-8-sig', 'cp1251', 'utf-16', 'utf-8']:
+            try:
+                with open('temp.csv', 'r', encoding=encoding) as f:
+                    content = list(csv.reader(f))
+                break # Если открылось - выходим из цикла
+            except UnicodeDecodeError:
+                continue
+                
+        if not content:
+            raise Exception("Не удалось распознать кодировку файла. Попробуйте сохранить как 'CSV UTF-8'.")
 
-        with open('temp.csv', 'r', encoding='utf-8-sig') as f:
-            reader = list(csv.reader(f))
+        # Берем только первые 300 строк, чтобы не перегружать память
+        for row in content[:300]:
+            if len(row) < 9: continue
             
-            # Ищем курс в первой строке (5-я колонка, индекс 4)
-            if len(reader) > 0 and len(reader[0]) > 4:
+            # Левая колонка
+            name_l = row[0].strip()
+            price_l = row[2].replace(',', '.').strip()
+            if name_l and price_l:
                 try:
-                    rate_val = reader[0][4].replace(',', '.').strip()
-                    if rate_val: rate = float(rate_val)
+                    products.append((name_l, float(price_l), rate, get_image_url(name_l)))
                 except: pass
             
-            # Проходим по всем строкам, начиная со 2-й (индекс 1)
-            for row in reader[1:]:
-                if len(row) < 9: continue
-                
-                # Левая колонка
-                name_l = row[0].strip()
-                price_l = row[2].replace(',', '.').strip()
-                if name_l and price_l:
-                    try:
-                        products.append((name_l, float(price_l), rate, get_image_url(name_l)))
-                    except: pass
-                
-                # Правая колонка
-                name_r = row[5].strip()
-                price_r = row[7].replace(',', '.').strip()
-                if name_r and price_r:
-                    try:
-                        products.append((name_r, float(price_r), rate, get_image_url(name_r)))
-                    except: pass
+            # Правая колонка
+            name_r = row[5].strip()
+            price_r = row[7].replace(',', '.').strip()
+            if name_r and price_r:
+                try:
+                    products.append((name_r, float(price_r), rate, get_image_url(name_r)))
+                except: pass
 
         # Очищаем старую базу и вставляем новую
         c.execute('DELETE FROM products')
         c.executemany('INSERT INTO products (name, base_price, rate, image) VALUES (?, ?, ?, ?)', products)
         conn.commit()
         
-        bot.reply_to(message, f"✅ Успех! Загружено {len(products)} позиций. Курс: {rate}")
+        bot.reply_to(message, f"✅ Успех! Загружено {len(products)} позиций.")
         
     except Exception as e:
         bot.reply_to(message, f"❌ ОШИБКА: {e}")
-        print(traceback.format_exc())
 
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
@@ -115,7 +117,7 @@ def handle_docs(message):
         bot.reply_to(message, "⏳ Читаю CSV-файл...")
         Thread(target=process_csv, args=(message,)).start()
     else:
-        bot.reply_to(message, "Пожалуйста, сохраните файл Excel в формате CSV и отправьте его сюда.")
+        bot.reply_to(message, "Пожалуйста, отправьте файл в формате .csv")
 
 # --- API ---
 @app.route('/')
