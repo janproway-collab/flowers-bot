@@ -1,12 +1,12 @@
 import telebot
 import os
-import json
 import sqlite3
 import time
 import openpyxl
 import traceback
 from datetime import datetime
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from threading import Thread
 
 # ===== ТВОИ ДАННЫЕ =====
@@ -16,6 +16,7 @@ ADMIN_ID = 5260033843
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
+CORS(app) # РАЗРЕШАЕМ САЙТУ ДЕЛАТЬ ЗАПРОСЫ
 
 # База данных
 conn = sqlite3.connect('flowers.db', check_same_thread=False)
@@ -40,7 +41,7 @@ def get_image_url(name):
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    bot.send_message(message.chat.id, "Добро пожаловать! Отправьте мне Excel-файл (.xlsx) с прайсом.")
+    bot.send_message(message.chat.id, "Добро пожаловать! Отправьте мне Excel-файл (.xlsx).")
 
 @bot.message_handler(commands=['approve'])
 def approve_cmd(message):
@@ -63,14 +64,12 @@ def process_excel(message):
         with open('temp.xlsx', 'wb') as new_file:
             new_file.write(downloaded_file)
         
-        # Открываем Excel в режиме read_only (чтобы не сожрать память)
         wb = openpyxl.load_workbook('temp.xlsx', read_only=True, data_only=True)
         sheet = wb.active
         
         products = []
         rate = 3.07 
         
-        # Ищем курс в E1
         try:
             rate_cell = sheet.cell(row=1, column=5).value
             if isinstance(rate_cell, (int, float)):
@@ -78,22 +77,19 @@ def process_excel(message):
         except:
             pass
 
-        # Проходимся по строкам (берем максимум 200 строк, чтобы не зависнуть)
         for row in sheet.iter_rows(min_row=2, max_row=200, max_col=9):
-            # Левая колонка (Гипсофила, Гвоздика и т.д.)
             name_left = row[0].value
             price_left = row[2].value
             if name_left and isinstance(price_left, (int, float)):
                 products.append((str(name_left).strip(), float(price_left), rate, get_image_url(str(name_left))))
 
-            # Правая колонка (Роза EC и т.д.)
             name_right = row[5].value
             price_right = row[7].value
             if name_right and isinstance(price_right, (int, float)):
                 products.append((str(name_right).strip(), float(price_right), rate, get_image_url(str(name_right))))
 
         if len(products) == 0:
-            bot.reply_to(message, "⚠️ Прочитал файл, но не нашел цен. Проверьте, что цены в колонках C и H — это цифры.")
+            bot.reply_to(message, "⚠️ Не нашел цены. Проверьте колонки.")
             return
 
         c.execute('DELETE FROM products')
@@ -109,12 +105,11 @@ def process_excel(message):
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
     if message.from_user.id != ADMIN_ID: return
-    
     if message.document.file_name.endswith('.xlsx'):
         bot.reply_to(message, "⏳ Читаю Excel-файл...")
         Thread(target=process_excel, args=(message,)).start()
     else:
-        bot.reply_to(message, "Пожалуйста, отправьте файл в формате .xlsx (обычный Excel).")
+        bot.reply_to(message, "Отправьте файл .xlsx")
 
 # --- API ---
 @app.route('/')
@@ -151,11 +146,9 @@ def receive_order():
     data = request.json
     items = data.get("items", [])
     total = data.get("total", "0")
-    
     text = f"🔥 Заявка!\nКлиент ID: {data.get('chat_id')}\n\n"
     for i in items: text += f"▪️ {i['name']} — {i['qty']} шт.\n"
     text += f"\n💰 Итого: {total} BYN"
-    
     bot.send_message(ADMIN_ID, text)
     return jsonify({"status": "ok"})
 
@@ -166,5 +159,5 @@ def run_web_server():
 if __name__ == '__main__':
     t = Thread(target=run_web_server)
     t.start()
-    time.sleep(10)
+    time.sleep(10) # Ждем, чтобы Render убил старую копию
     bot.infinity_polling()
