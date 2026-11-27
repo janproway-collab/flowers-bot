@@ -3,6 +3,7 @@ import os
 import json
 import sqlite3
 import pandas as pd
+import time # <--- ДОБАВИЛИ ЭТО
 from datetime import datetime
 from flask import Flask, request, jsonify
 from threading import Thread
@@ -15,7 +16,7 @@ ADMIN_ID = 5260033843
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# База данных (теперь она хранит и клиентов, и товары)
+# База данных
 conn = sqlite3.connect('flowers.db', check_same_thread=False)
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS approved (chat_id INTEGER PRIMARY KEY)''')
@@ -27,7 +28,6 @@ def is_approved(chat_id):
     c.execute('SELECT 1 FROM approved WHERE chat_id = ?', (chat_id,))
     return c.fetchone() is not None
 
-# Функция для подбора картинки по названию
 def get_image_url(name):
     n = name.lower()
     if 'роза' in n or 'rose' in n: return "https://source.unsplash.com/400x300/?rose,flower"
@@ -53,7 +53,6 @@ def approve_cmd(message):
     except:
         bot.send_message(ADMIN_ID, "Ошибка. Используй: /approve 123456789")
 
-# --- ОБРАБОТКА EXCEL ФАЙЛА ---
 @bot.message_handler(content_types=['document'])
 def handle_excel(message):
     if message.from_user.id != ADMIN_ID: return
@@ -63,36 +62,29 @@ def handle_excel(message):
     bot.reply_to(message, "⏳ Читаю прайс и обновляю каталог...")
     
     try:
-        # Скачиваем файл
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         with open('temp.xlsx', 'wb') as new_file:
             new_file.write(downloaded_file)
         
-        # Парсим Excel
         df = pd.read_excel('temp.xlsx', header=None)
         
-        # Берем курс из ячейки E1 (индекс 0,4), если там пусто - ставим 3.07
         rate = df.iloc[0, 4]
         if pd.isna(rate): rate = 3.07
         rate = float(rate)
 
         products = []
-        # Идем по строчкам
         for i, row in df.iterrows():
-            # Левая часть (Гипсофила, Гвоздика, Роза Кения и тд)
             name_left = row[0]
-            price_left = row[2] # Базовая цена
+            price_left = row[2]
             if pd.notna(name_left) and pd.notna(price_left) and isinstance(price_left, (int, float)):
                 products.append((str(name_left).strip(), float(price_left), rate, get_image_url(str(name_left))))
 
-            # Правая часть (Роза EC, Кустовая и тд)
             name_right = row[5]
-            price_right = row[7] # Базовая цена
+            price_right = row[7]
             if pd.notna(name_right) and pd.notna(price_right) and isinstance(price_right, (int, float)):
                 products.append((str(name_right).strip(), float(price_right), rate, get_image_url(str(name_right))))
 
-        # Очищаем старые товары и записываем новые
         c.execute('DELETE FROM products')
         c.executemany('INSERT INTO products (name, base_price, rate, image) VALUES (?, ?, ?, ?)', products)
         conn.commit()
@@ -102,7 +94,6 @@ def handle_excel(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка при чтении файла: {e}")
 
-# --- API ---
 @app.route('/')
 def home():
     return "Bot is alive!"
@@ -116,7 +107,7 @@ def get_products():
         result.append({
             "id": r[0],
             "name": r[1],
-            "price": round(r[2] * r[3], 2), # Умножаем базовую на курс
+            "price": round(r[2] * r[3], 2),
             "image": r[4]
         })
     return jsonify(result)
@@ -164,4 +155,9 @@ def run_web_server():
 if __name__ == '__main__':
     t = Thread(target=run_web_server)
     t.start()
+    
+    print("Ждем 10 секунд, чтобы старый сервер отключился...")
+    time.sleep(10) # <--- УМНАЯ ПАУЗА
+    
+    print("Бот запущен...")
     bot.infinity_polling()
