@@ -4,6 +4,7 @@ import json
 import sqlite3
 import time
 import openpyxl
+import traceback
 from datetime import datetime
 from flask import Flask, request, jsonify
 from threading import Thread
@@ -53,32 +54,23 @@ def approve_cmd(message):
     except:
         bot.send_message(ADMIN_ID, "Ошибка. Используй: /approve 123456789")
 
-# ЛЕГКИЙ ПАРСЕР EXCEL (без pandas)
-@bot.message_handler(content_types=['document'])
-def handle_excel(message):
-    if message.from_user.id != ADMIN_ID: return
-    if not message.document.file_name.endswith(('.xls', '.xlsx')):
-        return bot.reply_to(message, "Пожалуйста, отправьте файл Excel (.xlsx)")
-    
-    bot.reply_to(message, "⏳ Читаю прайс и обновляю каталог...")
-    
+# --- ПАРСЕР В ОТДЕЛЬНОМ ПОТОКЕ ---
+def process_excel(message):
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
+        
         with open('temp.xlsx', 'wb') as new_file:
             new_file.write(downloaded_file)
         
-        # Открываем файл в режиме read_only (экономит память)
         wb = openpyxl.load_workbook('temp.xlsx', read_only=True, data_only=True)
         sheet = wb.active
         
-        # Курс из ячейки E1 (1 строка, 5 колонка)
         rate = sheet.cell(row=1, column=5).value
         if not isinstance(rate, (int, float)): rate = 3.07
         rate = float(rate)
 
         products = []
-        # Идем по строчкам со 2-й (пропускаем заголовки)
         for row in sheet.iter_rows(min_row=2, max_col=9):
             name_left = row[0].value
             price_left = row[2].value
@@ -97,7 +89,19 @@ def handle_excel(message):
         bot.reply_to(message, f"✅ Успех! Загружено {len(products)} позиций. Курс: {rate}")
         
     except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка: {e}")
+        # Если произойдет ошибка, бот напишет её тебе
+        bot.reply_to(message, f"❌ ОШИБКА ПРИ ЧТЕНИИ: {e}")
+        print(traceback.format_exc())
+
+@bot.message_handler(content_types=['document'])
+def handle_excel(message):
+    if message.from_user.id != ADMIN_ID: return
+    if not message.document.file_name.endswith(('.xls', '.xlsx')):
+        return bot.reply_to(message, "Пожалуйста, отправьте файл Excel (.xlsx)")
+    
+    bot.reply_to(message, "⏳ Начинаю чтение файла в фоне. Подождите...")
+    # Запускаем парсинг в отдельном потоке, чтобы бот не завис
+    Thread(target=process_excel, args=(message,)).start()
 
 @app.route('/')
 def home():
