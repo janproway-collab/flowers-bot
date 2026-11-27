@@ -2,8 +2,8 @@ import telebot
 import os
 import json
 import sqlite3
-import pandas as pd
-import time # <--- ДОБАВИЛИ ЭТО
+import time
+import openpyxl
 from datetime import datetime
 from flask import Flask, request, jsonify
 from threading import Thread
@@ -53,6 +53,7 @@ def approve_cmd(message):
     except:
         bot.send_message(ADMIN_ID, "Ошибка. Используй: /approve 123456789")
 
+# ЛЕГКИЙ ПАРСЕР EXCEL (без pandas)
 @bot.message_handler(content_types=['document'])
 def handle_excel(message):
     if message.from_user.id != ADMIN_ID: return
@@ -67,22 +68,26 @@ def handle_excel(message):
         with open('temp.xlsx', 'wb') as new_file:
             new_file.write(downloaded_file)
         
-        df = pd.read_excel('temp.xlsx', header=None)
+        # Открываем файл в режиме read_only (экономит память)
+        wb = openpyxl.load_workbook('temp.xlsx', read_only=True, data_only=True)
+        sheet = wb.active
         
-        rate = df.iloc[0, 4]
-        if pd.isna(rate): rate = 3.07
+        # Курс из ячейки E1 (1 строка, 5 колонка)
+        rate = sheet.cell(row=1, column=5).value
+        if not isinstance(rate, (int, float)): rate = 3.07
         rate = float(rate)
 
         products = []
-        for i, row in df.iterrows():
-            name_left = row[0]
-            price_left = row[2]
-            if pd.notna(name_left) and pd.notna(price_left) and isinstance(price_left, (int, float)):
+        # Идем по строчкам со 2-й (пропускаем заголовки)
+        for row in sheet.iter_rows(min_row=2, max_col=9):
+            name_left = row[0].value
+            price_left = row[2].value
+            if name_left and isinstance(price_left, (int, float)):
                 products.append((str(name_left).strip(), float(price_left), rate, get_image_url(str(name_left))))
 
-            name_right = row[5]
-            price_right = row[7]
-            if pd.notna(name_right) and pd.notna(price_right) and isinstance(price_right, (int, float)):
+            name_right = row[5].value
+            price_right = row[7].value
+            if name_right and isinstance(price_right, (int, float)):
                 products.append((str(name_right).strip(), float(price_right), rate, get_image_url(str(name_right))))
 
         c.execute('DELETE FROM products')
@@ -92,7 +97,7 @@ def handle_excel(message):
         bot.reply_to(message, f"✅ Успех! Загружено {len(products)} позиций. Курс: {rate}")
         
     except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка при чтении файла: {e}")
+        bot.reply_to(message, f"❌ Ошибка: {e}")
 
 @app.route('/')
 def home():
@@ -156,8 +161,8 @@ if __name__ == '__main__':
     t = Thread(target=run_web_server)
     t.start()
     
-    print("Ждем 10 секунд, чтобы старый сервер отключился...")
-    time.sleep(10) # <--- УМНАЯ ПАУЗА
+    print("Ждем 10 секунд...")
+    time.sleep(10)
     
     print("Бот запущен...")
     bot.infinity_polling()
