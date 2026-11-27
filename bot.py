@@ -3,7 +3,7 @@ import os
 import json
 import sqlite3
 import time
-import openpyxl
+import csv
 import traceback
 from datetime import datetime
 from flask import Flask, request, jsonify
@@ -40,7 +40,7 @@ def get_image_url(name):
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    bot.send_message(message.chat.id, "Добро пожаловать в Flowers Truck! Нажми 'Каталог', чтобы открыть прайс.")
+    bot.send_message(message.chat.id, "Добро пожаловать! Отправьте мне CSV-файл с прайсом, чтобы обновить каталог.")
 
 @bot.message_handler(commands=['approve'])
 def approve_cmd(message):
@@ -54,34 +54,49 @@ def approve_cmd(message):
     except:
         bot.send_message(ADMIN_ID, "Ошибка. Используй: /approve 123456789")
 
-# --- ПАРСЕР В ОТДЕЛЬНОМ ПОТОКЕ ---
-def process_excel(message):
+# --- ЧТЕНИЕ CSV ФАЙЛА ---
+def process_csv(message):
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         
-        with open('temp.xlsx', 'wb') as new_file:
+        with open('temp.csv', 'wb') as new_file:
             new_file.write(downloaded_file)
         
-        wb = openpyxl.load_workbook('temp.xlsx', read_only=True, data_only=True)
-        sheet = wb.active
-        
-        rate = sheet.cell(row=1, column=5).value
-        if not isinstance(rate, (int, float)): rate = 3.07
-        rate = float(rate)
-
         products = []
-        for row in sheet.iter_rows(min_row=2, max_col=9):
-            name_left = row[0].value
-            price_left = row[2].value
-            if name_left and isinstance(price_left, (int, float)):
-                products.append((str(name_left).strip(), float(price_left), rate, get_image_url(str(name_left))))
+        rate = 3.07 # Значение по умолчанию
 
-            name_right = row[5].value
-            price_right = row[7].value
-            if name_right and isinstance(price_right, (int, float)):
-                products.append((str(name_right).strip(), float(price_right), rate, get_image_url(str(name_right))))
+        with open('temp.csv', 'r', encoding='utf-8-sig') as f:
+            reader = list(csv.reader(f))
+            
+            # Ищем курс в первой строке (5-я колонка, индекс 4)
+            if len(reader) > 0 and len(reader[0]) > 4:
+                try:
+                    rate_val = reader[0][4].replace(',', '.').strip()
+                    if rate_val: rate = float(rate_val)
+                except: pass
+            
+            # Проходим по всем строкам, начиная со 2-й (индекс 1)
+            for row in reader[1:]:
+                if len(row) < 9: continue
+                
+                # Левая колонка
+                name_l = row[0].strip()
+                price_l = row[2].replace(',', '.').strip()
+                if name_l and price_l:
+                    try:
+                        products.append((name_l, float(price_l), rate, get_image_url(name_l)))
+                    except: pass
+                
+                # Правая колонка
+                name_r = row[5].strip()
+                price_r = row[7].replace(',', '.').strip()
+                if name_r and price_r:
+                    try:
+                        products.append((name_r, float(price_r), rate, get_image_url(name_r)))
+                    except: pass
 
+        # Очищаем старую базу и вставляем новую
         c.execute('DELETE FROM products')
         c.executemany('INSERT INTO products (name, base_price, rate, image) VALUES (?, ?, ?, ?)', products)
         conn.commit()
@@ -89,37 +104,28 @@ def process_excel(message):
         bot.reply_to(message, f"✅ Успех! Загружено {len(products)} позиций. Курс: {rate}")
         
     except Exception as e:
-        # Если произойдет ошибка, бот напишет её тебе
-        bot.reply_to(message, f"❌ ОШИБКА ПРИ ЧТЕНИИ: {e}")
+        bot.reply_to(message, f"❌ ОШИБКА: {e}")
         print(traceback.format_exc())
 
 @bot.message_handler(content_types=['document'])
-def handle_excel(message):
+def handle_docs(message):
     if message.from_user.id != ADMIN_ID: return
-    if not message.document.file_name.endswith(('.xls', '.xlsx')):
-        return bot.reply_to(message, "Пожалуйста, отправьте файл Excel (.xlsx)")
     
-    bot.reply_to(message, "⏳ Начинаю чтение файла в фоне. Подождите...")
-    # Запускаем парсинг в отдельном потоке, чтобы бот не завис
-    Thread(target=process_excel, args=(message,)).start()
+    if message.document.file_name.endswith('.csv'):
+        bot.reply_to(message, "⏳ Читаю CSV-файл...")
+        Thread(target=process_csv, args=(message,)).start()
+    else:
+        bot.reply_to(message, "Пожалуйста, сохраните файл Excel в формате CSV и отправьте его сюда.")
 
+# --- API ---
 @app.route('/')
-def home():
-    return "Bot is alive!"
+def home(): return "Bot is alive!"
 
 @app.route('/api/products', methods=['GET'])
 def get_products():
     c.execute('SELECT id, name, base_price, rate, image FROM products')
     rows = c.fetchall()
-    result = []
-    for r in rows:
-        result.append({
-            "id": r[0],
-            "name": r[1],
-            "price": round(r[2] * r[3], 2),
-            "image": r[4]
-        })
-    return jsonify(result)
+    return jsonify([{"id": r[0], "name": r[1], "price": round(r[2] * r[3], 2), "image": r[4]} for r in rows])
 
 @app.route('/api/check', methods=['POST'])
 def check_user():
@@ -135,10 +141,8 @@ def request_access():
     now = datetime.now()
     is_work_time = now.weekday() < 5 and 9 <= now.hour < 18
     
-    if is_work_time:
-        bot.send_message(chat_id, "Заявка отправлена. Ожидайте.")
-    else:
-        bot.send_message(chat_id, "Мы работаем Пн-Пт с 09:00 до 18:00. Заявка будет рассмотрена в рабочее время.")
+    if is_work_time: bot.send_message(chat_id, "Заявка отправлена. Ожидайте.")
+    else: bot.send_message(chat_id, "Мы работаем Пн-Пт с 09:00 до 18:00. Заявка будет рассмотрена в рабочее время.")
     
     bot.send_message(ADMIN_ID, f"🔔 Запрос!\nИмя: {name}\nID: {chat_id}\n\n/approve {chat_id}")
     return jsonify({"status": "ok"})
@@ -150,8 +154,7 @@ def receive_order():
     total = data.get("total", "0")
     
     text = f"🔥 Заявка!\nКлиент ID: {data.get('chat_id')}\n\n"
-    for i in items:
-        text += f"▪️ {i['name']} — {i['qty']} шт.\n"
+    for i in items: text += f"▪️ {i['name']} — {i['qty']} шт.\n"
     text += f"\n💰 Итого: {total} BYN"
     
     bot.send_message(ADMIN_ID, text)
@@ -164,9 +167,5 @@ def run_web_server():
 if __name__ == '__main__':
     t = Thread(target=run_web_server)
     t.start()
-    
-    print("Ждем 10 секунд...")
     time.sleep(10)
-    
-    print("Бот запущен...")
     bot.infinity_polling()
