@@ -1,6 +1,6 @@
 import telebot
 import os
-from flask import Flask
+from flask import Flask, request
 from threading import Thread
 
 # ===== ТВОИ ДАННЫЕ =====
@@ -16,18 +16,14 @@ def start_message(message):
 
 @bot.message_handler(content_types=['web_app_data'])
 def handle_web_app_data(message):
-    # Эта строчка выведет данные в логи Render, чтобы мы точно знали, что они дошли
-    print("!!! ПОЛУЧЕНЫ ДАННЫЕ ИЗ ПРИЛОЖЕНИЯ:", message.web_app_data.data)
-    
-    order_data = message.web_app_data.data
+    print("!!! ПОЛУЧЕНЫ ДАННЫЕ ОТ ТЕЛЕГРАМ:", message.web_app_data.data)
     try:
         bot.send_message(
             ADMIN_ID,
-            f"🔥 Новая заявка!\nКлиент: {message.from_user.first_name}\nДанные: {order_data}"
+            f"🔥 Новая заявка!\nКлиент: {message.from_user.first_name}\nДанные: {message.web_app_data.data}"
         )
     except Exception as e:
         print("ОШИБКА ОТПРАВКИ:", e)
-
     bot.send_message(message.chat.id, "✅ Заявка принята! Менеджер свяжется с вами.")
 
 # --- Фейковый сайт для Render ---
@@ -37,10 +33,22 @@ app = Flask(__name__)
 def home():
     return "Bot is alive!"
 
+# НОВЫЙ МАРШРУТ ДЛЯ ОТЛАДКИ (принимает данные напрямую с сайта)
+@app.route('/debug', methods=['POST'])
+def debug():
+    data = request.json
+    print("!!! ДАННЫЕ ПРИШЛИ НАПРЯМУЮ С САЙТА (fetch):", data)
+    # Отправляем тебе в ТГ, чтобы ты видел, что это сработало
+    try:
+        bot.send_message(ADMIN_ID, f"🛠 ТЕСТОВОЕ СООБЩЕНИЕ (напрямую с сайта):\n{data}")
+    except:
+        pass
+    return "OK", 200
+# --------------------------------
+
 def run_web_server():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
-# --------------------------------
 
 if __name__ == '__main__':
     t = Thread(target=run_web_server)
